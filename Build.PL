@@ -10,6 +10,7 @@ my $builder = Module::Build->new(
     requires => {
         'Test::More' => 0,
         'version'    => 0,
+        'Class::Std' => 0,
     },
     add_to_cleanup      => [ 'Acme-6502-*' ],
 );

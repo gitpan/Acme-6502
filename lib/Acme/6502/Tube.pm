@@ -5,9 +5,10 @@ use strict;
 use Carp;
 use Class::Std;
 use Time::HiRes qw(time);
+use Term::ReadKey;
 use base qw(Acme::6502);
 
-use version; our $VERSION = qv('0.0.1');
+use version; our $VERSION = qv('0.0.2');
 
 use constant ERROR => 0xF800;
 
@@ -120,6 +121,10 @@ sub BUILD {
         }
     };
 
+    my $set_escape = sub {
+        $self->write_8(0xFF, 0xFF);
+    };
+
     my $osword = sub {
         my $a   = $self->get_a();
         my $blk = $self->get_xy();
@@ -165,7 +170,19 @@ sub BUILD {
     };
 
     my $osrdch = sub {
-        die "OSRDCH not handled\n";
+        ReadMode(4);
+        eval {
+            my $k = ReadKey(0);
+            $self->set_a(ord($k));
+            if (ord($k) == 27) {
+                $set_escape->();
+                $self->set_p($self->get_p() | $self->C);
+            } else {
+                $self->set_p($self->get_p() & ~$self->C);
+            }
+        };
+        ReadMode(0);
+        die $@ if $@;
     };
 
     my $osfile = sub {
@@ -268,6 +285,7 @@ sub call_os {
         $err =~ s/\s+/ /;
         $err =~ s/^\s+//;
         $err =~ s/\s+$//;
+        warn $err;
         my $ep = ERROR + 2;
         for (map ord, split //, $err) {
             $self->write_8($ep++, $_);
@@ -286,7 +304,7 @@ Acme::6502 - Pure Perl 65C02 simulator.
 
 =head1 VERSION
 
-This document describes Acme::6502 version 0.0.1
+This document describes Acme::6502 version 0.0.2
 
 =head1 SYNOPSIS
 
