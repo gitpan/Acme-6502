@@ -5,7 +5,7 @@ use strict;
 use Carp;
 use Class::Std;
 
-use version; our $VERSION = qv('0.0.3');
+use version; our $VERSION = qv('0.0.4');
 
 # CPU flags
 use constant {
@@ -812,7 +812,7 @@ Acme::6502 - Pure Perl 65C02 simulator.
 
 =head1 VERSION
 
-This document describes Acme::6502 version 0.0.3
+This document describes Acme::6502 version 0.0.4
 
 =head1 SYNOPSIS
 

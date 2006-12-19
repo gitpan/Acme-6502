@@ -8,7 +8,7 @@ use Time::HiRes qw(time);
 use Term::ReadKey;
 use base qw(Acme::6502);
 
-use version; our $VERSION = qv('0.0.3');
+use version; our $VERSION = qv('0.0.4');
 
 use constant ERROR => 0xF800;
 
@@ -323,11 +323,11 @@ __END__
 
 =head1 NAME
 
-Acme::6502 - Pure Perl 65C02 simulator.
+Acme::6502::Tube - Acorn 65C02 Second Processor Simulator
 
 =head1 VERSION
 
-This document describes Acme::6502 version 0.0.3
+This document describes Acme::6502::Tube version 0.0.4
 
 =head1 SYNOPSIS
 
