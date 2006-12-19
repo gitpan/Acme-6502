@@ -5,7 +5,7 @@ use strict;
 use Carp;
 use Class::Std;
 
-use version; our $VERSION = qv('0.0.2');
+use version; our $VERSION = qv('0.0.3');
 
 # CPU flags
 use constant {
@@ -19,6 +19,8 @@ use constant {
     C => 0x01
 };
 
+use constant FLAGS => 'NVRBDIZC';
+ 
 # Other CPU constants
 use constant {
     STACK => 0x0100,
@@ -455,6 +457,19 @@ sub BUILD {
             my $v = shift;
             $x = $v & 0xFF;
             $y = ($v >> 8) & 0xFF;
+        },
+        
+        decode_flags => sub {
+            my $f = shift;
+            my $b = 0x80;
+            my $n = FLAGS;
+            my $desc = '';
+            while ($n) {
+                $desc .= ($f & $b) ? substr($n, 0, 1) : '-';
+                $n = substr($n, 1);
+                $b >>= 1;
+            }
+            return $desc;
         }
     };
 
@@ -797,7 +812,7 @@ Acme::6502 - Pure Perl 65C02 simulator.
 
 =head1 VERSION
 
-This document describes Acme::6502 version 0.0.2
+This document describes Acme::6502 version 0.0.3
 
 =head1 SYNOPSIS
 

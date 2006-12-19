@@ -8,7 +8,7 @@ use Time::HiRes qw(time);
 use Term::ReadKey;
 use base qw(Acme::6502);
 
-use version; our $VERSION = qv('0.0.2');
+use version; our $VERSION = qv('0.0.3');
 
 use constant ERROR => 0xF800;
 
@@ -39,12 +39,15 @@ use constant {
     OSCLI  => 0xFFF7
 };
 
-my %os : ATTR;
+my %os      : ATTR;
+my %trace   : ATTR;
 
 sub BUILD {
     my ($self, $id, $args) = @_;
 
     my $time_base = time();
+
+    $trace{$id} = $args->{trace} || 0;
 
     $os{$id} = [ ];
 
@@ -172,9 +175,10 @@ sub BUILD {
     my $osrdch = sub {
         ReadMode(4);
         eval {
-            my $k = ReadKey(0);
-            $self->set_a(ord($k));
-            if (ord($k) == 27) {
+            my $k = ord(ReadKey(0));
+            $k = 0x0D if $k == 0x0A;
+            $self->set_a($k);
+            if ($k == 27) {
                 $set_escape->();
                 $self->set_p($self->get_p() | $self->C);
             } else {
@@ -247,25 +251,27 @@ sub BUILD {
     };
 
     my $make_vector = sub {
-        my ($addr, $vec, $code) = @_;
+        my ($name, $vec, $code) = @_;
+        my $addr = eval $name;
+        die $@ if $@;
         my $vecno = scalar @{$os{$id}};
-        push @{$os{$id}}, $code;
+        push @{$os{$id}}, [ $code, $name ];
         $self->make_vector($addr, $vec, $vecno);
     };
 
     $self->set_jumptab(0xFA00);
 
-    $make_vector->(OSCLI,  0x208, $oscli);
-    $make_vector->(OSBYTE, 0x20A, $osbyte);
-    $make_vector->(OSWORD, 0x20C, $osword);
-    $make_vector->(OSWRCH, 0x20E, $oswrch);
-    $make_vector->(OSRDCH, 0x210, $osrdch);
-    $make_vector->(OSFILE, 0x212, $osfile);
-    $make_vector->(OSARGS, 0x214, $osargs);
-    $make_vector->(OSBGET, 0x216, $osbget);
-    $make_vector->(OSBPUT, 0x218, $osbput);
-    $make_vector->(OSGBPB, 0x21A, $osgbpb);
-    $make_vector->(OSFIND, 0x21C, $osfind);    
+    $make_vector->('OSCLI',  0x208, $oscli);
+    $make_vector->('OSBYTE', 0x20A, $osbyte);
+    $make_vector->('OSWORD', 0x20C, $osword);
+    $make_vector->('OSWRCH', 0x20E, $oswrch);
+    $make_vector->('OSRDCH', 0x210, $osrdch);
+    $make_vector->('OSFILE', 0x212, $osfile);
+    $make_vector->('OSARGS', 0x214, $osargs);
+    $make_vector->('OSBGET', 0x216, $osbget);
+    $make_vector->('OSBPUT', 0x218, $osbput);
+    $make_vector->('OSGBPB', 0x21A, $osgbpb);
+    $make_vector->('OSFIND', 0x21C, $osfind);    
 }
 
 sub call_os {
@@ -273,10 +279,27 @@ sub call_os {
     my $id   = ident($self);
     my $i    = shift;
 
+    my $tf;
+
     eval {
-        die "Bad OS call $i\n"
-            unless exists $os{$id}->[$i];
-        $os{$id}->[$i]->();
+
+        my $call = $os{$id}->[$i] || die "Bad OS call $i\n";
+    
+        if ($trace{$id}) {
+            $tf = sub {
+                my $pos = shift;
+                my ($a, $x, $y, $s, $p, $pc) = $self->get_state();
+                $p = $self->decode_flags($p);
+                warn sprintf("%6s %6s %02x %02x %02x %02x %8s %04x\n",
+                    $pos, $call->[1], $a, $x, $y, $s, $p, $pc);
+            };
+        } else {
+            $tf = sub { };
+        }
+        
+        $tf->('before');
+        $call->[0]->();
+        $tf->('after');
     };
 
     if ($@) {
@@ -304,7 +327,7 @@ Acme::6502 - Pure Perl 65C02 simulator.
 
 =head1 VERSION
 
-This document describes Acme::6502 version 0.0.2
+This document describes Acme::6502 version 0.0.3
 
 =head1 SYNOPSIS
 

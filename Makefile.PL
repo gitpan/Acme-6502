@@ -9,9 +9,10 @@ WriteMakefile(
     ABSTRACT_FROM       => 'lib/Acme/6502.pm',
     PL_FILES            => {},
     PREREQ_PM => {
-        'Test::More' => 0,
-        'version'    => 0,
-        'Class::Std' => 0,
+        'Test::More'    => 0,
+        'version'       => 0,
+        'Class::Std'    => 0,
+        'Term::ReadKey' => 0,
     },
     dist                => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
     clean               => { FILES => 'Acme-6502-*' },
