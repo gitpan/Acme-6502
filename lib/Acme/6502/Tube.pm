@@ -4,11 +4,12 @@ use warnings;
 use strict;
 use Carp;
 use Class::Std;
+use Class::Std::Slots;
 use Time::HiRes qw(time);
 use Term::ReadKey;
 use base qw(Acme::6502);
 
-use version; our $VERSION = qv('0.0.4');
+use version; our $VERSION = qv('0.0.6');
 
 use constant ERROR => 0xF800;
 
@@ -39,15 +40,16 @@ use constant {
     OSCLI  => 0xFFF7
 };
 
+signals qw(
+    pre_os post_os
+);
+
 my %os      : ATTR;
-my %trace   : ATTR;
 
 sub BUILD {
     my ($self, $id, $args) = @_;
 
     my $time_base = time();
-
-    $trace{$id} = $args->{trace} || 0;
 
     $os{$id} = [ ];
 
@@ -279,27 +281,12 @@ sub call_os {
     my $id   = ident($self);
     my $i    = shift;
 
-    my $tf;
-
     eval {
-
         my $call = $os{$id}->[$i] || die "Bad OS call $i\n";
-    
-        if ($trace{$id}) {
-            $tf = sub {
-                my $pos = shift;
-                my ($a, $x, $y, $s, $p, $pc) = $self->get_state();
-                $p = $self->decode_flags($p);
-                warn sprintf("%6s %6s %02x %02x %02x %02x %8s %04x\n",
-                    $pos, $call->[1], $a, $x, $y, $s, $p, $pc);
-            };
-        } else {
-            $tf = sub { };
-        }
-        
-        $tf->('before');
+
+        $self->pre_os($call->[1]);
         $call->[0]->();
-        $tf->('after');
+        $self->post_os($call->[1]);
     };
 
     if ($@) {
@@ -327,7 +314,7 @@ Acme::6502::Tube - Acorn 65C02 Second Processor Simulator
 
 =head1 VERSION
 
-This document describes Acme::6502::Tube version 0.0.4
+This document describes Acme::6502::Tube version 0.0.6
 
 =head1 SYNOPSIS
 
