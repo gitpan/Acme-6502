@@ -24,5 +24,19 @@ Revision history for Acme-6502
         An end to version number madness. I hope.
     
 0.71    2007-11-08
-	A new dawn in the struggle to free ourselves from the
-	shackles of version number oppression.
+        A new dawn in the struggle to free ourselves from the
+        shackles of version number oppression.
+
+0.72    2008-09-24
+        Added a test suite pulled from the monkeynes project
+        - patched script_7C.txt to work properly
+        - patched script_94.txt to test proper mem location
+        - patched script_95.txt to test proper mem location
+        - patched script_96.txt to test proper mem location
+        - patched all branching tests to do proper negative branches
+        - patched script_40.txt and script_00.txt with proper diag info and
+          proper PC storage on BRK
+        Fix PLP to clear B flag instead of setting it
+        Fix TSX to set N and Z flag based on the value of X
+        Emulate a page boundary bug in JMP instructions
+        Fix BRK to set B flag

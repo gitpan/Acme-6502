@@ -1,9 +1,11 @@
 --- #YAML:1.0
 name:                Acme-6502
-version:             0.71
+version:             0.72
 abstract:            Pure Perl 65C02 simulator.
 license:             perl
-generated_by:        ExtUtils::MakeMaker version 6.36
+author:              
+    - Andy Armstrong <andy@hexten.net>
+generated_by:        ExtUtils::MakeMaker version 6.44
 distribution_type:   module
 requires:     
     Class::Std:                    0
@@ -11,7 +13,5 @@ requires:
     Term::ReadKey:                 0
     Test::More:                    0
 meta-spec:
-    url:     http://module-build.sourceforge.net/META-spec-v1.2.html
-    version: 1.2
-author:
-    - Andy Armstrong <andy@hexten.net>
+    url:     http://module-build.sourceforge.net/META-spec-v1.3.html
+    version: 1.3
