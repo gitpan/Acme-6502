@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:                Acme-6502
-version:             0.72
+version:             0.73
 abstract:            Pure Perl 65C02 simulator.
 license:             perl
 author:              
