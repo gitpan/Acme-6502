@@ -5,7 +5,7 @@ use strict;
 use Carp;
 use Class::Std;
 
-our $VERSION = '0.73';
+our $VERSION = '0.74';
 
 # CPU flags
 use constant {
@@ -795,10 +795,17 @@ sub _bfnz {
 
 sub _jmp_i {
   my $a = shift;
-# this should emulate a page boundary bug:
-# JMP 0x80FF fetches from 0x80FF and 0x8000 instead of 0x80FF and 0x8100
-  my $b = "($a & 0xff) == 0xff ? ($a & 0xff00) : $a + 1";
-  return '$pc = $mem[' . $a . '] | ($mem[' . $b . ' ] << 8);' . "\n";
+  return '$pc = $mem[' . $a . '] | ($mem[' . $a . ' + 1] << 8);' . "\n";
+}
+
+sub _jmp_i_bug {
+  my $a = shift;
+
+  # this should emulate a page boundary bug:
+  # JMP 0x80FF fetches from 0x80FF and 0x8000
+  # instead of 0x80FF and 0x8100
+  my $b = "($a & 0xFF00) | (($a + 1) & 0xFF)";
+  return '$pc = $mem[' . $a . '] | ($mem[' . $b . '] << 8);' . "\n";
 }
 
 sub _jmp {
@@ -806,7 +813,8 @@ sub _jmp {
 }
 
 sub _jmpi {
-  return 'my $w = $mem[$pc] | ($mem[$pc + 1] << 8); ' . _jmp_i( '$w' );
+  return 'my $w = $mem[$pc] | ($mem[$pc + 1] << 8); '
+   . _jmp_i_bug( '$w' );
 }
 
 sub _jmpix {
@@ -831,7 +839,7 @@ Acme::6502 - Pure Perl 65C02 simulator.
 
 =head1 VERSION
 
-This document describes Acme::6502 version 0.73
+This document describes Acme::6502 version 0.74
 
 =head1 SYNOPSIS
 
