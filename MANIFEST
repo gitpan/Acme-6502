@@ -1,9 +1,10 @@
 Build.PL
 Changes
+inc/MyBuilder.pm
 lib/Acme/6502.pm
 lib/Acme/6502/Tube.pm
-Makefile.PL
 MANIFEST
+META.yml
 README
 Roms/Forth-2.5.rom
 t/00.load.t
@@ -162,5 +163,4 @@ t/monkeynes/script_FD.txt
 t/monkeynes/script_FE.txt
 t/pod-coverage.t
 t/pod.t
-META.yml                                 Module meta-data (added by MakeMaker)
-SIGNATURE                                Public-key signature (added by MakeMaker)
+SIGNATURE    Added here by Module::Build
