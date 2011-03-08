@@ -3,11 +3,13 @@ Changes
 inc/MyBuilder.pm
 lib/Acme/6502.pm
 lib/Acme/6502/Tube.pm
-MANIFEST
+MANIFEST			This list of files
+META.json
 META.yml
 README
 Roms/Forth-2.5.rom
 t/00.load.t
+t/leak.t
 t/monkeynes.t
 t/monkeynes/script_00.txt
 t/monkeynes/script_01.txt
@@ -163,4 +165,3 @@ t/monkeynes/script_FD.txt
 t/monkeynes/script_FE.txt
 t/pod-coverage.t
 t/pod.t
-SIGNATURE    Added here by Module::Build

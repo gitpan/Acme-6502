@@ -3,9 +3,8 @@ package Acme::6502;
 use warnings FATAL => 'all';
 use strict;
 use Carp;
-use Class::Std;
 
-our $VERSION = '0.75';
+our $VERSION = '0.76';
 
 # CPU flags
 use constant {
@@ -33,472 +32,506 @@ use constant {
   ESCAPE_SIG => 0xAD
 };
 
-my %cpu : ATTR;
-
-sub BUILD {
-  my ( $self, $id, $args ) = @_;
-
-  my @mem = ( 0 ) x 65536;
-  my @os;
-  my ( $a, $x, $y, $s, $p, $pc ) = ( 0 ) x 6;
-
-  # Page used to allocate vector thunks
-  my $jumptab = $args->{jumptab} || 0xFA00;
-
-  my $bad_inst = sub {
-    croak sprintf( "Bad instruction at &%04x (&%02x)\n",
-      $pc - 1, $mem[ $pc - 1 ] );
-  };
-
-  my @zn = ( Z, ( 0 ) x 127, ( N ) x 128 );
-
-  my $inst = sub {
-    my $src = join( "\n", @_ );
-    my $cr = eval "sub { @_ }";
-    confess "$@" if $@;
-    return $cr;
-  };
-
-  my @decode = (
-    $inst->(    # 00 BRK
-      _push( '($pc + 1) >> 8', '($pc + 1)' ),
-      _push( '$p | B' ),
-      '$p = $p | I | B & ~D;',
-      _jmp_i( BREAK )
-    ),
-    $inst->( _ora( _zpix() ) ),      # 01 ORA (zp, x)
-    $bad_inst,                       # 02
-    $bad_inst,                       # 03
-    $inst->( _tsb( _zp() ) ),        # 04 TSB zp
-    $inst->( _ora( _zp() ) ),        # 05 ORA zp
-    $inst->( _asl( _zp() ) ),        # 06 ASL zp
-    $bad_inst,                       # 07
-    $inst->( _push( '$p | R' ) ),    # 08 PHP
-    $inst->( _ora( _imm() ) ),       # 09 ORA #imm
-    $inst->( _asl( _acc() ) ),       # 0A ASL A
-    $bad_inst,                       # 0B
-    $inst->( _tsb( _abs() ) ),       # 0C TSB zp
-    $inst->( _ora( _abs() ) ),       # 0D ORA abs
-    $inst->( _asl( _abs() ) ),       # 0E ASL abs
-    $bad_inst,                       # 0F BBR0 rel
-    $inst->( _bfz( _rel(), N ) ),    # 10 BPL rel
-    $inst->( _ora( _zpiy() ) ),      # 11 ORA (zp), y
-    $inst->( _ora( _zpi() ) ),       # 12 ORA (zp)
-    $bad_inst,                       # 13
-    $inst->( _trb( _zpi() ) ),       # 14 TRB (zp)
-    $inst->( _ora( _zpx() ) ),       # 15 ORA zp, x
-    $inst->( _asl( _zpx() ) ),       # 16 ASL zp, x
-    $bad_inst,                       # 17
-    $inst->( '$p &= ~C;' ),          # 18 CLC
-    $inst->( _ora( _absy() ) ),      # 19 ORA abs, y
-    $inst->( _inc( _acc() ) ),       # 1A INC A
-    $bad_inst,                       # 1B
-    $inst->( _trb( _abs() ) ),       # 1C TRB abs
-    $inst->( _ora( _absx() ) ),      # 1D ORA abs, x
-    $inst->( _asl( _absx() ) ),      # 1E ASL abs, x
-    $bad_inst,                       # 1F BBR1 rel
-    $inst->(                         # 20 JSR
-      _push( '($pc + 1) >> 8', '($pc + 1)' ),
-      _jmp()
-    ),
-    $inst->( _and( _zpix() ) ),      # 21 AND (zp, x)
-    $bad_inst,                       # 22
-    $bad_inst,                       # 23
-    $inst->( _bit( _zp() ) ),        # 24 BIT zp
-    $inst->( _and( _zp() ) ),        # 25 AND zp
-    $inst->( _rol( _zp() ) ),        # 26 ROL zp
-    $bad_inst,                       # 27
-    $inst->( _pop_p() ),             # 28 PLP
-    $inst->( _and( _imm() ) ),       # 29 AND  #imm
-    $inst->( _rol( _acc() ) ),       # 2A ROL A
-    $bad_inst,                       # 2B
-    $inst->( _bit( _abs() ) ),       # 2C BIT abs
-    $inst->( _and( _abs() ) ),       # 2D AND abs
-    $inst->( _rol( _abs() ) ),       # 2E ROL abs
-    $bad_inst,                       # 2F BBR2 rel
-    $inst->( _bfnz( _rel(), N ) ),   # 30 BPL rel
-    $inst->( _and( _zpiy() ) ),      # 31 AND (zp), y
-    $inst->( _and( _zpi() ) ),       # 32 AND (zp)
-    $bad_inst,                       # 33
-    $inst->( _bit( _zpx() ) ),       # 34 BIT zp, x
-    $inst->( _and( _zpx() ) ),       # 35 AND zp, x
-    $inst->( _rol( _zpx() ) ),       # 36 ROL zp, x
-    $bad_inst,                       # 37
-    $inst->( '$p |= C;' ),           # 38 SEC
-    $inst->( _and( _absy() ) ),      # 39 AND abs, y
-    $inst->( _dec( _acc() ) ),       # 3A DEC A
-    $bad_inst,                       # 3B
-    $inst->( _bit( _absx() ) ),      # 3C BIT abs, x
-    $inst->( _and( _absx() ) ),      # 3D AND abs, x
-    $inst->( _rol( _absx() ) ),      # 3E ROL abs, x
-    $bad_inst,                       # 3F BBR3 rel
-    $inst->( _pop( '$p' ), _rts() ), # 40 RTI
-    $inst->( _eor( _zpix() ) ),      # 41 EOR (zp, x)
-    $bad_inst,                       # 42
-    $bad_inst,                       # 43
-    $bad_inst,                       # 44
-    $inst->( _eor( _zp() ) ),        # 45 EOR zp
-    $inst->( _lsr( _zp() ) ),        # 46 LSR zp
-    $bad_inst,                       # 47
-    $inst->( _push( '$a' ) ),        # 48 PHA
-    $inst->( _eor( _imm() ) ),       # 49 EOR imm
-    $inst->( _lsr( _acc() ) ),       # 4A LSR A
-    $bad_inst,                       # 4B
-    $inst->( _jmp() ),               # 4C JMP abs
-    $inst->( _eor( _abs() ) ),       # 4D EOR abs
-    $inst->( _lsr( _abs() ) ),       # 4E LSR abs
-    $bad_inst,                       # 4F BBR4 rel
-    $inst->( _bfz( _rel(), V ) ),    # 50 BVC rel
-    $inst->( _eor( _zpiy() ) ),      # 51 EOR (zp), y
-    $inst->( _eor( _zpi() ) ),       # 52 EOR (zp)
-    $bad_inst,                       # 53
-    $bad_inst,                       # 54
-    $inst->( _eor( _zpx() ) ),       # 55 EOR zp, x
-    $inst->( _lsr( _zpx() ) ),       # 56 LSR zp, x
-    $bad_inst,                       # 57
-    $inst->( '$p &= ~I;' ),          # 58 CLI
-    $inst->( _eor( _absy() ) ),      # 59 EOR abs, y
-    $inst->( _push( '$y' ) ),        # 5A PHY
-    $bad_inst,                       # 5B
-    $bad_inst,                       # 5C
-    $inst->( _eor( _absx() ) ),      # 5D EOR abs, x
-    $inst->( _lsr( _absx() ) ),      # 5E LSR abs, x
-    $bad_inst,                       # 5F BBR5 rel
-    $inst->( _rts() ),               # 60 RTS
-    $inst->( _adc( _zpx() ) ),       # 61 ADC zp, x
-    $bad_inst,                       # 62
-    $bad_inst,                       # 63
-    $inst->( _sto( _zp(), '0' ) ),   # 64 STZ zp
-    $inst->( _adc( _zp() ) ),        # 65 ADC zp
-    $inst->( _ror( _zp() ) ),        # 66 ROR zp
-    $bad_inst,                       # 67
-    $inst->( _pop( '$a' ), _status( '$a' ) ),    # 68 PLA
-    $inst->( _adc( _imm() ) ),                   # 69 ADC  #imm
-    $inst->( _ror( _acc() ) ),                   # 6A ROR A
-    $bad_inst,                                   # 6B
-    $inst->( _jmpi() ),                          # 6C JMP (abs)
-    $inst->( _adc( _abs() ) ),                   # 6D ADC abs
-    $inst->( _ror( _abs() ) ),                   # 6E ROR abs
-    $bad_inst,                                   # 6F BBR6 rel
-    $inst->( _bfnz( _rel(), V ) ),               # 70 BVS rel
-    $inst->( _adc( _zpiy() ) ),                  # 71 ADC (zp), y
-    $inst->( _adc( _zpi() ) ),                   # 72 ADC (zp)
-    $bad_inst,                                   # 73
-    $inst->( _sto( _zpx(), '0' ) ),              # 74 STZ zp, x
-    $inst->( _adc( _zpx() ) ),                   # 75 ADC zp, x
-    $inst->( _adc( _zpx() ) ),                   # 76 ROR zp, x
-    $bad_inst,                                   # 77
-    $inst->( '$p |= I;' ),                       # 78 STI
-    $inst->( _adc( _absy() ) ),                  # 79 ADC abs, y
-    $inst->( _pop( '$y' ), _status( '$y' ) ),    # 7A PLY
-    $bad_inst,                                   # 7B
-    $inst->( _jmpix() ),                         # 7C JMP (abs, x)
-    $inst->( _adc( _absx() ) ),                  # 7D ADC abs, x
-    $inst->( _ror( _absx() ) ),                  # 7E ROR abs, x
-    $bad_inst,                                   # 7F BBR7 rel
-    $inst->( _bra( _rel() ) ),                   # 80 BRA rel
-    $inst->( _sto( _zpix(), '$a' ) ),            # 81 STA (zp, x)
-    $bad_inst,                                   # 82
-    $bad_inst,                                   # 83
-    $inst->( _sto( _zp(), '$y' ) ),              # 84 STY zp
-    $inst->( _sto( _zp(), '$a' ) ),              # 85 STA zp
-    $inst->( _sto( _zp(), '$x' ) ),              # 86 STX zp
-    $bad_inst,                                   # 87
-    $inst->( _dec( ( '', '$y' ) ) ),             # 88 DEY
-    $inst->( _bit( _imm() ) ),                   # 89 BIT  #imm
-    $inst->( '$a = $x;' . _status( '$a' ) ),     # 8A TXA
-    $bad_inst,                                   # 8B
-    $inst->( _sto( _abs(), '$y' ) ),             # 8C STY abs
-    $inst->( _sto( _abs(), '$a' ) ),             # 8D STA abs
-    $inst->( _sto( _abs(), '$x' ) ),             # 8E STX abs
-    $bad_inst,                                   # 8F BBS0 rel
-    $inst->( _bfz( _rel(), C ) ),                # 90 BCC rel
-    $inst->( _sto( _zpiy(), '$a' ) ),            # 91 STA (zp), y
-    $inst->( _sto( _zpi(),  '$a' ) ),            # 92 STA (zp)
-    $bad_inst,                                   # 93
-    $inst->( _sto( _zpx(), '$y' ) ),             # 94 STY zp, x
-    $inst->( _sto( _zpx(), '$a' ) ),             # 95 STA zp, x
-    $inst->( _sto( _zpy(), '$x' ) ),             # 96 STX zp, y
-    $bad_inst,                                   # 97
-    $inst->( '$a = $y;' . _status( '$a' ) ),     # 98 TYA
-    $inst->( _sto( _absy(), '$a' ) ),            # 99 STA abs, y
-    $inst->( '$s = $x;' ),                       # 9A TXS
-    $bad_inst,                                   # 9B
-    $inst->( _sto( _abs(),  '0' ) ),             # 9C STZ abs
-    $inst->( _sto( _absx(), '$a' ) ),            # 9D STA abs, x
-    $inst->( _sto( _absx(), '0' ) ),             # 9E STZ abs, x
-    $bad_inst,                                   # 9F BBS1 rel
-    $inst->( _lod( _imm(),  '$y' ) ),            # A0 LDY  #imm
-    $inst->( _lod( _zpix(), '$a' ) ),            # A1 LDA (zp, x)
-    $inst->( _lod( _imm(),  '$x' ) ),            # A2 LDX  #imm
-    $bad_inst,                                   # A3
-    $inst->( _lod( _zp(), '$y' ) ),              # A4 LDY zp
-    $inst->( _lod( _zp(), '$a' ) ),              # A5 LDA zp
-    $inst->( _lod( _zp(), '$x' ) ),              # A6 LDX zp
-    $bad_inst,                                   # A7
-    $inst->( '$y = $a;' . _status( '$y' ) ),     # A8 TAY
-    $inst->( _lod( _imm(), '$a' ) ),             # A9 LDA  #imm
-    $inst->( '$x = $a;' . _status( '$x' ) ),     # AA TAX
-    $bad_inst,                                   # AB
-    $inst->( _lod( _abs(), '$y' ) ),             # AC LDY abs
-    $inst->( _lod( _abs(), '$a' ) ),             # AD LDA abs
-    $inst->( _lod( _abs(), '$x' ) ),             # AE LDX abs
-    $bad_inst,                                   # AF BBS2 rel
-    $inst->( _bfnz( _rel(), C ) ),               # B0 BCS rel
-    $inst->( _lod( _zpiy(), '$a' ) ),            # B1 LDA (zp), y
-    $inst->( _lod( _zpi(),  '$a' ) ),            # B2 LDA (zp)
-    $bad_inst,                                   # B3
-    $inst->( _lod( _zpx(), '$y' ) ),             # B4 LDY zp, x
-    $inst->( _lod( _zpx(), '$a' ) ),             # B5 LDA zp, x
-    $inst->( _lod( _zpy(), '$x' ) ),             # B6 LDX zp, y
-    $bad_inst,                                   # B7
-    $inst->( '$p &= ~V;' ),                      # B8 CLV
-    $inst->( _lod( _absy(), '$a' ) ),            # B9 LDA abs, y
-    $inst->( '$x = $s;', _set_nz( '$x' ) ),      # BA TSX
-    $bad_inst,                                   # BB
-    $inst->( _lod( _absx(), '$y' ) ),            # BC LDY abs, x
-    $inst->( _lod( _absx(), '$a' ) ),            # BD LDA abs, x
-    $inst->( _lod( _absy(), '$x' ) ),            # BE LDX abs, y
-    $bad_inst,                                   # BF BBS3 rel
-    $inst->( _cmp( _imm(),  '$y' ) ),            # C0 CPY  #imm
-    $inst->( _cmp( _zpix(), '$a' ) ),            # C1 CMP (zp, x)
-    $bad_inst,                                   # C2
-    $bad_inst,                                   # C3
-    $inst->( _cmp( _zp(), '$y' ) ),              # C4 CPY zp
-    $inst->( _cmp( _zp(), '$a' ) ),              # C5 CMP zp
-    $inst->( _dec( _zp() ) ),                    # C6 DEC zp
-    $bad_inst,                                   # C7
-    $inst->( _inc( ( '', '$y' ) ) ),             # C8 INY
-    $inst->( _cmp( _imm(), '$a' ) ),             # C9 CMP  #imm
-    $inst->( _dec( ( '', '$x' ) ) ),             # CA DEX
-    $bad_inst,                                   # CB
-    $inst->( _cmp( _abs(), '$y' ) ),             # CC CPY abs
-    $inst->( _cmp( _abs(), '$a' ) ),             # CD CMP abs
-    $inst->( _dec( _abs() ) ),                   # CE DEC abs
-    $bad_inst,                                   # CF BBS4 rel
-    $inst->( _bfz( _rel(), Z ) ),                # D0 BNE rel
-    $inst->( _cmp( _zpiy(), '$a' ) ),            # D1 CMP (zp), y
-    $inst->( _cmp( _zpi(),  '$a' ) ),            # D2 CMP (zp)
-    $bad_inst,                                   # D3
-    $bad_inst,                                   # D4
-    $inst->( _cmp( _zpx(), '$a' ) ),             # D5 CMP zp, x
-    $inst->( _dec( _zpx() ) ),                   # D6 DEC zp, x
-    $bad_inst,                                   # D7
-    $inst->( '$p &= ~D;' ),                      # D8 CLD
-    $inst->( _cmp( _absy(), '$a' ) ),            # D9 CMP abs, y
-    $inst->( _push( '$x' ) ),                    # DA PHX
-    $bad_inst,                                   # DB
-    $bad_inst,                                   # DC
-    $inst->( _cmp( _absx(), '$a' ) ),            # DD CMP abs, x
-    $inst->( _dec( _absx() ) ),                  # DE DEC abs, x
-    $bad_inst,                                   # DF BBS5 rel
-    $inst->( _cmp( _imm(), '$x' ) ),             # E0 CPX  #imm
-    $inst->( _sbc( _zpix(), '$a' ) ),            # E1 SBC (zp, x)
-    $bad_inst,                                   # E2
-    $bad_inst,                                   # E3
-    $inst->( _cmp( _zp(), '$x' ) ),              # E4 CPX zp
-    $inst->( _sbc( _zp() ) ),                    # E5 SBC zp
-    $inst->( _inc( _zp() ) ),                    # E6 INC zp
-    $bad_inst,                                   # E7
-    $inst->( _inc( ( '', '$x' ) ) ),             # E8 INX
-    $inst->( _sbc( _imm() ) ),                   # E9 SBC  #imm
-    $inst->(),                                   # EA NOP
-    $bad_inst,                                   # EB
-    $inst->( _cmp( _abs(), '$x' ) ),             # EC CPX abs
-    $inst->( _sbc( _abs() ) ),                   # ED SBC abs
-    $inst->( _inc( _abs() ) ),                   # EE INC abs
-    $bad_inst,                                   # EF BBS6 rel
-    $inst->( _bfnz( _rel(), Z ) ),               # F0 BEQ rel
-    $inst->( _sbc( _zpiy() ) ),                  # F1 SBC (zp), y
-    $inst->( _sbc( _zpi() ) ),                   # F2 SBC (zp)
-    $bad_inst,                                   # F3
-    $bad_inst,                                   # F4
-    $inst->( _sbc( _zpx() ) ),                   # F5 SBC zp, x
-    $inst->( _inc( _zpx() ) ),                   # F6 INC zp, x
-    $bad_inst,                                   # F7
-    $inst->( '$p |= D;' ),                       # F8 SED
-    $inst->( _sbc( _absy() ) ),                  # F9 SBC abs, y
-    $inst->( _pop( '$x' ), _status( '$x' ) ),    # FA PLX
-    $bad_inst,                                   # FB
-    $bad_inst,                                   # FC
-    $inst->( _sbc( _absx() ) ),                  # FD SBC abs, x
-    $inst->( _inc( _absx() ) ),                  # FE INC abs, x
-    $bad_inst                                    # FF BBS7 rel
-  );
-
-  confess "Escape handler opcode not available"
-   unless $decode[ESCAPE_OP] == $bad_inst;
-
-  # Patch in the OS escape op handler
-  $decode[ESCAPE_OP] = sub {
-    if ( $mem[$pc] != ESCAPE_SIG ) {
-      $bad_inst->();
+BEGIN {
+    for my $reg ( qw(a x y s p pc) ) {
+        no strict 'refs';
+        *{ __PACKAGE__ . "\::get_${reg}" } = sub {
+            my $self = shift;
+            return $self->{ reg }->{ $reg };
+        };
+        *{ __PACKAGE__ . "\::set_${reg}" } = sub {
+            my ( $self, $v ) = @_;
+            $self->{ reg }->{ $reg } = $v;
+        };
     }
-    else {
-      $pc += 2;
-      $self->call_os( $mem[ $pc - 1 ] );
-    }
-  };
-
-  $cpu{$id} = {
-    set_jumptab => sub {
-      $jumptab = shift;
-    },
-
-    read_str => sub {
-      my $addr = shift;
-      my $str  = '';
-      while ( $mem[$addr] != 0x0D ) {
-        $str .= chr( $mem[ $addr++ ] );
-      }
-      return $str;
-    },
-
-    read_chunk => sub {
-      my ( $from, $to ) = @_;
-      return pack( 'C*', @mem[ $from .. $to - 1 ] );
-    },
-
-    write_chunk => sub {
-      my ( $addr, $chunk ) = @_;
-      my $len = length( $chunk );
-      splice @mem, $addr, $len, unpack( 'C*', $chunk );
-    },
-
-    read_8 => sub {
-      my $addr = shift;
-      return $mem[$addr];
-    },
-
-    write_8 => sub {
-      my ( $addr, $val ) = @_;
-      $mem[$addr] = $val;
-    },
-
-    read_16 => sub {
-      my $addr = shift;
-      return $mem[$addr] | ( $mem[ $addr + 1 ] << 8 );
-    },
-
-    write_16 => sub {
-      my ( $addr, $val ) = @_;
-      $mem[ $addr + 0 ] = ( $val >> 0 ) & 0xFF;
-      $mem[ $addr + 1 ] = ( $val >> 8 ) & 0xFF;
-    },
-
-    read_32 => sub {
-      my $addr = shift;
-      return $mem[$addr] | ( $mem[ $addr + 1 ] << 8 )
-       | ( $mem[ $addr + 2 ] << 16 ) | ( $mem[ $addr + 3 ] << 32 );
-    },
-
-    write_32 => sub {
-      my ( $addr, $val ) = @_;
-      $mem[ $addr + 0 ] = ( $val >> 0 ) & 0xFF;
-      $mem[ $addr + 1 ] = ( $val >> 8 ) & 0xFF;
-      $mem[ $addr + 2 ] = ( $val >> 16 ) & 0xFF;
-      $mem[ $addr + 3 ] = ( $val >> 24 ) & 0xFF;
-    },
-
-    run => sub {
-      my $ic = shift;
-      my $cb = shift;
-      if ( defined( $cb ) ) {
-        while ( $ic-- > 0 ) {
-          $cb->( $pc, $mem[$pc], $a, $x, $y, $s, $p );
-          $decode[ $mem[ $pc++ ] ]->();
-        }
-      }
-      else {
-        while ( $ic-- > 0 ) {
-          $decode[ $mem[ $pc++ ] ]->();
-        }
-      }
-    },
-
-    load_rom => sub {
-      my ( $f, $a ) = @_;
-      open my $fh, '<', $f or croak "Can't read $f ($!)\n";
-      binmode $fh;
-      my $sz = -s $fh;
-      sysread $fh, my $buf, $sz
-       or croak "Error reading $f ($!)\n";
-      $self->write_chunk( $a, $buf );
-    },
-
-    poke_code => sub {
-      my $addr = shift;
-      $mem[ $addr++ ] = $_ for @_;
-    },
-
-    make_vector => sub {
-      my ( $call, $vec, $func ) = @_;
-      $mem[ $call + 0 ] = 0x6C;                   # JMP (indirect)
-      $mem[ $call + 1 ] = $vec & 0xFF;
-      $mem[ $call + 2 ] = ( $vec >> 8 ) & 0xFF;
-
-      my $addr = $jumptab;
-      $mem[ $jumptab++ ] = ESCAPE_OP;
-      $mem[ $jumptab++ ] = ESCAPE_SIG;
-      $mem[ $jumptab++ ] = $func;
-      $mem[ $jumptab++ ] = 0x60;
-
-      $mem[ $vec + 0 ] = $addr & 0xFF;
-      $mem[ $vec + 1 ] = ( $addr >> 8 ) & 0xFF;
-    },
-
-    get_state => sub {
-      return ( $a, $x, $y, $s, $p, $pc );
-    },
-
-    get_xy => sub {
-      return $x || ( $y << 8 );
-    },
-
-    set_xy => sub {
-      my $v = shift;
-      $x = $v & 0xFF;
-      $y = ( $v >> 8 ) & 0xFF;
-    },
-
-    decode_flags => sub {
-      my $f    = shift;
-      my $b    = 0x80;
-      my $n    = FLAGS;
-      my $desc = '';
-      while ( $n ) {
-        $desc .= ( $f & $b ) ? substr( $n, 0, 1 ) : '-';
-        $n = substr( $n, 1 );
-        $b >>= 1;
-      }
-      return $desc;
-     }
-  };
-
-  # Generate register accessors.
-  for my $reg ( qw(a x y s p pc) ) {
-    $cpu{$id}->{"get_$reg"} = eval "sub { return \$$reg; }";
-    $cpu{$id}->{"set_$reg"} = eval "sub { \$$reg = \$_[0]; }";
-  }
 }
 
-sub AUTOMETHOD {
-  my ( $self, $id, @args ) = @_;
-  my $methname = $_;
+sub new {
+    my $class = shift;
+    my $self  = bless { }, $class;
 
-  if ( exists( $cpu{$id}->{$methname} ) ) {
-    return sub {
-      return $cpu{$id}->{$methname}->( @args );
-     }
-  }
+    $self->_BUILD( @_ );
 
-  return;
+    return $self;
+}
+
+my @OP_CACHE;
+
+sub _BUILD {
+    my( $self, $args ) = @_;
+
+    $args ||= {};
+
+    $self->{ mem } = [ ( 0 ) x 65536 ];
+    $self->{ reg } = {
+        map { $_ => 0 } qw( a x y s p pc )
+    };
+    $self->{ os } = [ ];
+    $self->{ jumptab } = $args->{ jumptab } || 0xFA00;
+    $self->{ zn } = [ $self->Z, ( 0 ) x 127, ( $self->N ) x 128 ];
+
+    my $bad_inst = $self->can( '_bad_inst' );
+
+    @OP_CACHE = (
+        _inst(    # 00 BRK
+          _push( '($pc + 1) >> 8', '($pc + 1)' ),
+          _push( '$p | B' ),
+          '$p = $p | I | B & ~D;',
+          _jmp_i( BREAK )
+        ),
+        _inst( _ora( _zpix() ) ),      # 01 ORA (zp, x)
+        $bad_inst,                     # 02
+        $bad_inst,                     # 03
+        _inst( _tsb( _zp() ) ),        # 04 TSB zp
+        _inst( _ora( _zp() ) ),        # 05 ORA zp
+        _inst( _asl( _zp() ) ),        # 06 ASL zp
+        $bad_inst,                     # 07
+        _inst( _push( '$p | R' ) ),    # 08 PHP
+        _inst( _ora( _imm() ) ),       # 09 ORA #imm
+        _inst( _asl( _acc() ) ),       # 0A ASL A
+        $bad_inst,                     # 0B
+        _inst( _tsb( _abs() ) ),       # 0C TSB zp
+        _inst( _ora( _abs() ) ),       # 0D ORA abs
+        _inst( _asl( _abs() ) ),       # 0E ASL abs
+        $bad_inst,                     # 0F BBR0 rel
+        _inst( _bfz( _rel(), N ) ),    # 10 BPL rel
+        _inst( _ora( _zpiy() ) ),      # 11 ORA (zp), y
+        _inst( _ora( _zpi() ) ),       # 12 ORA (zp)
+        $bad_inst,                     # 13
+        _inst( _trb( _zpi() ) ),       # 14 TRB (zp)
+        _inst( _ora( _zpx() ) ),       # 15 ORA zp, x
+        _inst( _asl( _zpx() ) ),       # 16 ASL zp, x
+        $bad_inst,                     # 17
+        _inst( '$p &= ~C;' ),          # 18 CLC
+        _inst( _ora( _absy() ) ),      # 19 ORA abs, y
+        _inst( _inc( _acc() ) ),       # 1A INC A
+        $bad_inst,                     # 1B
+        _inst( _trb( _abs() ) ),       # 1C TRB abs
+        _inst( _ora( _absx() ) ),      # 1D ORA abs, x
+        _inst( _asl( _absx() ) ),      # 1E ASL abs, x
+        $bad_inst,                     # 1F BBR1 rel
+        _inst(                         # 20 JSR
+          _push( '($pc + 1) >> 8', '($pc + 1)' ),
+          _jmp()
+        ),
+        _inst( _and( _zpix() ) ),      # 21 AND (zp, x)
+        $bad_inst,                     # 22
+        $bad_inst,                     # 23
+        _inst( _bit( _zp() ) ),        # 24 BIT zp
+        _inst( _and( _zp() ) ),        # 25 AND zp
+        _inst( _rol( _zp() ) ),        # 26 ROL zp
+        $bad_inst,                     # 27
+        _inst( _pop_p() ),             # 28 PLP
+        _inst( _and( _imm() ) ),       # 29 AND  #imm
+        _inst( _rol( _acc() ) ),       # 2A ROL A
+        $bad_inst,                     # 2B
+        _inst( _bit( _abs() ) ),       # 2C BIT abs
+        _inst( _and( _abs() ) ),       # 2D AND abs
+        _inst( _rol( _abs() ) ),       # 2E ROL abs
+        $bad_inst,                     # 2F BBR2 rel
+        _inst( _bfnz( _rel(), N ) ),   # 30 BPL rel
+        _inst( _and( _zpiy() ) ),      # 31 AND (zp), y
+        _inst( _and( _zpi() ) ),       # 32 AND (zp)
+        $bad_inst,                     # 33
+        _inst( _bit( _zpx() ) ),       # 34 BIT zp, x
+        _inst( _and( _zpx() ) ),       # 35 AND zp, x
+        _inst( _rol( _zpx() ) ),       # 36 ROL zp, x
+        $bad_inst,                     # 37
+        _inst( '$p |= C;' ),           # 38 SEC
+        _inst( _and( _absy() ) ),      # 39 AND abs, y
+        _inst( _dec( _acc() ) ),       # 3A DEC A
+        $bad_inst,                     # 3B
+        _inst( _bit( _absx() ) ),      # 3C BIT abs, x
+        _inst( _and( _absx() ) ),      # 3D AND abs, x
+        _inst( _rol( _absx() ) ),      # 3E ROL abs, x
+        $bad_inst,                     # 3F BBR3 rel
+        _inst( _pop( '$p' ), _rts() ), # 40 RTI
+        _inst( _eor( _zpix() ) ),      # 41 EOR (zp, x)
+        $bad_inst,                     # 42
+        $bad_inst,                     # 43
+        $bad_inst,                     # 44
+        _inst( _eor( _zp() ) ),        # 45 EOR zp
+        _inst( _lsr( _zp() ) ),        # 46 LSR zp
+        $bad_inst,                     # 47
+        _inst( _push( '$a' ) ),        # 48 PHA
+        _inst( _eor( _imm() ) ),       # 49 EOR imm
+        _inst( _lsr( _acc() ) ),       # 4A LSR A
+        $bad_inst,                     # 4B
+        _inst( _jmp() ),               # 4C JMP abs
+        _inst( _eor( _abs() ) ),       # 4D EOR abs
+        _inst( _lsr( _abs() ) ),       # 4E LSR abs
+        $bad_inst,                     # 4F BBR4 rel
+        _inst( _bfz( _rel(), V ) ),    # 50 BVC rel
+        _inst( _eor( _zpiy() ) ),      # 51 EOR (zp), y
+        _inst( _eor( _zpi() ) ),       # 52 EOR (zp)
+        $bad_inst,                     # 53
+        $bad_inst,                     # 54
+        _inst( _eor( _zpx() ) ),       # 55 EOR zp, x
+        _inst( _lsr( _zpx() ) ),       # 56 LSR zp, x
+        $bad_inst,                     # 57
+        _inst( '$p &= ~I;' ),          # 58 CLI
+        _inst( _eor( _absy() ) ),      # 59 EOR abs, y
+        _inst( _push( '$y' ) ),        # 5A PHY
+        $bad_inst,                     # 5B
+        $bad_inst,                     # 5C
+        _inst( _eor( _absx() ) ),      # 5D EOR abs, x
+        _inst( _lsr( _absx() ) ),      # 5E LSR abs, x
+        $bad_inst,                     # 5F BBR5 rel
+        _inst( _rts() ),               # 60 RTS
+        _inst( _adc( _zpx() ) ),       # 61 ADC zp, x
+        $bad_inst,                     # 62
+        $bad_inst,                     # 63
+        _inst( _sto( _zp(), '0' ) ),   # 64 STZ zp
+        _inst( _adc( _zp() ) ),        # 65 ADC zp
+        _inst( _ror( _zp() ) ),        # 66 ROR zp
+        $bad_inst,                     # 67
+        _inst( _pop( '$a' ), _status( '$a' ) ),    # 68 PLA
+        _inst( _adc( _imm() ) ),                   # 69 ADC  #imm
+        _inst( _ror( _acc() ) ),                   # 6A ROR A
+        $bad_inst,                                 # 6B
+        _inst( _jmpi() ),                          # 6C JMP (abs)
+        _inst( _adc( _abs() ) ),                   # 6D ADC abs
+        _inst( _ror( _abs() ) ),                   # 6E ROR abs
+        $bad_inst,                                 # 6F BBR6 rel
+        _inst( _bfnz( _rel(), V ) ),               # 70 BVS rel
+        _inst( _adc( _zpiy() ) ),                  # 71 ADC (zp), y
+        _inst( _adc( _zpi() ) ),                   # 72 ADC (zp)
+        $bad_inst,                                 # 73
+        _inst( _sto( _zpx(), '0' ) ),              # 74 STZ zp, x
+        _inst( _adc( _zpx() ) ),                   # 75 ADC zp, x
+        _inst( _adc( _zpx() ) ),                   # 76 ROR zp, x
+        $bad_inst,                                 # 77
+        _inst( '$p |= I;' ),                       # 78 STI
+        _inst( _adc( _absy() ) ),                  # 79 ADC abs, y
+        _inst( _pop( '$y' ), _status( '$y' ) ),    # 7A PLY
+        $bad_inst,                                 # 7B
+        _inst( _jmpix() ),                         # 7C JMP (abs, x)
+        _inst( _adc( _absx() ) ),                  # 7D ADC abs, x
+        _inst( _ror( _absx() ) ),                  # 7E ROR abs, x
+        $bad_inst,                                 # 7F BBR7 rel
+        _inst( _bra( _rel() ) ),                   # 80 BRA rel
+        _inst( _sto( _zpix(), '$a' ) ),            # 81 STA (zp, x)
+        $bad_inst,                                 # 82
+        $bad_inst,                                 # 83
+        _inst( _sto( _zp(), '$y' ) ),              # 84 STY zp
+        _inst( _sto( _zp(), '$a' ) ),              # 85 STA zp
+        _inst( _sto( _zp(), '$x' ) ),              # 86 STX zp
+        $bad_inst,                                 # 87
+        _inst( _dec( ( '', '$y' ) ) ),             # 88 DEY
+        _inst( _bit( _imm() ) ),                   # 89 BIT  #imm
+        _inst( '$a = $x;' . _status( '$a' ) ),     # 8A TXA
+        $bad_inst,                                 # 8B
+        _inst( _sto( _abs(), '$y' ) ),             # 8C STY abs
+        _inst( _sto( _abs(), '$a' ) ),             # 8D STA abs
+        _inst( _sto( _abs(), '$x' ) ),             # 8E STX abs
+        $bad_inst,                                 # 8F BBS0 rel
+        _inst( _bfz( _rel(), C ) ),                # 90 BCC rel
+        _inst( _sto( _zpiy(), '$a' ) ),            # 91 STA (zp), y
+        _inst( _sto( _zpi(),  '$a' ) ),            # 92 STA (zp)
+        $bad_inst,                                 # 93
+        _inst( _sto( _zpx(), '$y' ) ),             # 94 STY zp, x
+        _inst( _sto( _zpx(), '$a' ) ),             # 95 STA zp, x
+        _inst( _sto( _zpy(), '$x' ) ),             # 96 STX zp, y
+        $bad_inst,                                 # 97
+        _inst( '$a = $y;' . _status( '$a' ) ),     # 98 TYA
+        _inst( _sto( _absy(), '$a' ) ),            # 99 STA abs, y
+        _inst( '$s = $x;' ),                       # 9A TXS
+        $bad_inst,                                 # 9B
+        _inst( _sto( _abs(),  '0' ) ),             # 9C STZ abs
+        _inst( _sto( _absx(), '$a' ) ),            # 9D STA abs, x
+        _inst( _sto( _absx(), '0' ) ),             # 9E STZ abs, x
+        $bad_inst,                                 # 9F BBS1 rel
+        _inst( _lod( _imm(),  '$y' ) ),            # A0 LDY  #imm
+        _inst( _lod( _zpix(), '$a' ) ),            # A1 LDA (zp, x)
+        _inst( _lod( _imm(),  '$x' ) ),            # A2 LDX  #imm
+        $bad_inst,                                 # A3
+        _inst( _lod( _zp(), '$y' ) ),              # A4 LDY zp
+        _inst( _lod( _zp(), '$a' ) ),              # A5 LDA zp
+        _inst( _lod( _zp(), '$x' ) ),              # A6 LDX zp
+        $bad_inst,                                 # A7
+        _inst( '$y = $a;' . _status( '$y' ) ),     # A8 TAY
+        _inst( _lod( _imm(), '$a' ) ),             # A9 LDA  #imm
+        _inst( '$x = $a;' . _status( '$x' ) ),     # AA TAX
+        $bad_inst,                                 # AB
+        _inst( _lod( _abs(), '$y' ) ),             # AC LDY abs
+        _inst( _lod( _abs(), '$a' ) ),             # AD LDA abs
+        _inst( _lod( _abs(), '$x' ) ),             # AE LDX abs
+        $bad_inst,                                 # AF BBS2 rel
+        _inst( _bfnz( _rel(), C ) ),               # B0 BCS rel
+        _inst( _lod( _zpiy(), '$a' ) ),            # B1 LDA (zp), y
+        _inst( _lod( _zpi(),  '$a' ) ),            # B2 LDA (zp)
+        $bad_inst,                                 # B3
+        _inst( _lod( _zpx(), '$y' ) ),             # B4 LDY zp, x
+        _inst( _lod( _zpx(), '$a' ) ),             # B5 LDA zp, x
+        _inst( _lod( _zpy(), '$x' ) ),             # B6 LDX zp, y
+        $bad_inst,                                 # B7
+        _inst( '$p &= ~V;' ),                      # B8 CLV
+        _inst( _lod( _absy(), '$a' ) ),            # B9 LDA abs, y
+        _inst( '$x = $s;', _set_nz( '$x' ) ),      # BA TSX
+        $bad_inst,                                 # BB
+        _inst( _lod( _absx(), '$y' ) ),            # BC LDY abs, x
+        _inst( _lod( _absx(), '$a' ) ),            # BD LDA abs, x
+        _inst( _lod( _absy(), '$x' ) ),            # BE LDX abs, y
+        $bad_inst,                                 # BF BBS3 rel
+        _inst( _cmp( _imm(),  '$y' ) ),            # C0 CPY  #imm
+        _inst( _cmp( _zpix(), '$a' ) ),            # C1 CMP (zp, x)
+        $bad_inst,                                 # C2
+        $bad_inst,                                 # C3
+        _inst( _cmp( _zp(), '$y' ) ),              # C4 CPY zp
+        _inst( _cmp( _zp(), '$a' ) ),              # C5 CMP zp
+        _inst( _dec( _zp() ) ),                    # C6 DEC zp
+        $bad_inst,                                 # C7
+        _inst( _inc( ( '', '$y' ) ) ),             # C8 INY
+        _inst( _cmp( _imm(), '$a' ) ),             # C9 CMP  #imm
+        _inst( _dec( ( '', '$x' ) ) ),             # CA DEX
+        $bad_inst,                                 # CB
+        _inst( _cmp( _abs(), '$y' ) ),             # CC CPY abs
+        _inst( _cmp( _abs(), '$a' ) ),             # CD CMP abs
+        _inst( _dec( _abs() ) ),                   # CE DEC abs
+        $bad_inst,                                 # CF BBS4 rel
+        _inst( _bfz( _rel(), Z ) ),                # D0 BNE rel
+        _inst( _cmp( _zpiy(), '$a' ) ),            # D1 CMP (zp), y
+        _inst( _cmp( _zpi(),  '$a' ) ),            # D2 CMP (zp)
+        $bad_inst,                                 # D3
+        $bad_inst,                                 # D4
+        _inst( _cmp( _zpx(), '$a' ) ),             # D5 CMP zp, x
+        _inst( _dec( _zpx() ) ),                   # D6 DEC zp, x
+        $bad_inst,                                 # D7
+        _inst( '$p &= ~D;' ),                      # D8 CLD
+        _inst( _cmp( _absy(), '$a' ) ),            # D9 CMP abs, y
+        _inst( _push( '$x' ) ),                    # DA PHX
+        $bad_inst,                                 # DB
+        $bad_inst,                                 # DC
+        _inst( _cmp( _absx(), '$a' ) ),            # DD CMP abs, x
+        _inst( _dec( _absx() ) ),                  # DE DEC abs, x
+        $bad_inst,                                 # DF BBS5 rel
+        _inst( _cmp( _imm(), '$x' ) ),             # E0 CPX  #imm
+        _inst( _sbc( _zpix(), '$a' ) ),            # E1 SBC (zp, x)
+        $bad_inst,                                 # E2
+        $bad_inst,                                 # E3
+        _inst( _cmp( _zp(), '$x' ) ),              # E4 CPX zp
+        _inst( _sbc( _zp() ) ),                    # E5 SBC zp
+        _inst( _inc( _zp() ) ),                    # E6 INC zp
+        $bad_inst,                                 # E7
+        _inst( _inc( ( '', '$x' ) ) ),             # E8 INX
+        _inst( _sbc( _imm() ) ),                   # E9 SBC  #imm
+        _inst(),                                   # EA NOP
+        $bad_inst,                                 # EB
+        _inst( _cmp( _abs(), '$x' ) ),             # EC CPX abs
+        _inst( _sbc( _abs() ) ),                   # ED SBC abs
+        _inst( _inc( _abs() ) ),                   # EE INC abs
+        $bad_inst,                                 # EF BBS6 rel
+        _inst( _bfnz( _rel(), Z ) ),               # F0 BEQ rel
+        _inst( _sbc( _zpiy() ) ),                  # F1 SBC (zp), y
+        _inst( _sbc( _zpi() ) ),                   # F2 SBC (zp)
+        $bad_inst,                                 # F3
+        $bad_inst,                                 # F4
+        _inst( _sbc( _zpx() ) ),                   # F5 SBC zp, x
+        _inst( _inc( _zpx() ) ),                   # F6 INC zp, x
+        $bad_inst,                                 # F7
+        _inst( '$p |= D;' ),                       # F8 SED
+        _inst( _sbc( _absy() ) ),                  # F9 SBC abs, y
+        _inst( _pop( '$x' ), _status( '$x' ) ),    # FA PLX
+        $bad_inst,                                 # FB
+        $bad_inst,                                 # FC
+        _inst( _sbc( _absx() ) ),                  # FD SBC abs, x
+        _inst( _inc( _absx() ) ),                  # FE INC abs, x
+        $bad_inst,                                 # FF BBS7 rel
+    ) if !@OP_CACHE;
+    $self->{ ops } = [ @OP_CACHE ];
+
+    confess "Escape handler opcode not available"
+       unless $self->{ ops }->[ ESCAPE_OP ] == $bad_inst;
+
+    # Patch in the OS escape op handler
+    $self->{ ops }->[ ESCAPE_OP ] = sub {
+        my $self = shift;
+        if ( $self->{ mem }->[ $self->{ reg }->{ pc } ] != ESCAPE_SIG ) {
+            $bad_inst->( $self );
+        }
+        else {
+            $self->{ reg }->{ pc } += 2;
+            $self->call_os( $self->{ mem }->[ $self->{ reg }->{ pc } - 1 ] );
+        }
+    };
+}
+
+sub set_jumptab {
+    my $self = shift;
+    $self->{ jumptab } = shift;
+}
+
+sub get_state {
+    my $self = shift;
+    return @{ $self->{ reg } }{ qw( a x y s p pc ) };
+}
+
+sub get_xy {
+    my $self = shift;
+    return $self->get_x || ( $self->get_y << 8 );
+}
+
+sub set_xy {
+    my $self = shift;
+    my $v = shift;
+    $self->set_x( $v & 0xFF );
+    $self->set_y( ( $v >> 8 ) & 0xFF );
+}
+
+sub read_str {
+    my $self = shift;
+    my $addr = shift;
+    my $str  = '';
+
+    while ( $self->{ mem }->[ $addr ] != 0x0D ) {
+        $str .= chr( $self->{ mem }->[ $addr++ ] );
+    }
+
+    return $str;
+}
+
+sub read_chunk {
+    my $self = shift;
+    my ( $from, $to ) = @_;
+
+    return pack( 'C*', @{ $self->{ mem } }[ $from .. $to - 1 ] );
+}
+
+sub write_chunk {
+    my $self = shift;
+    my ( $addr, $chunk ) = @_;
+
+    my $len = length( $chunk );
+    splice @{ $self->{ mem } }, $addr, $len, unpack( 'C*', $chunk );
+}
+
+sub read_8 {
+    my $self = shift;
+    my $addr = shift;
+
+    return $self->{ mem }->[ $addr ];
+}
+
+sub write_8 {
+    my $self = shift;
+    my( $addr, $val ) = @_;
+
+    $self->{ mem }->[ $addr ] = $val;
+}
+
+sub read_16 {
+    my $self = shift;
+    my $addr = shift;
+
+    return $self->{ mem }->[ $addr ] | ( $self->{ mem }->[ $addr + 1 ] << 8 );
+}
+
+sub write_16 {
+    my $self = shift;
+    my( $addr, $val ) = @_;
+
+    $self->{ mem }->[ $addr ] = $val & 0xFF;
+    $self->{ mem }->[ $addr + 1 ] = ( $val >> 8 ) & 0xFF;
+}
+
+sub read_32 {
+    my $self = shift;
+    my $addr = shift;
+
+    return $self->{ mem }->[ $addr ]
+        | ( $self->{ mem }->[ $addr + 1 ] << 8 )
+        | ( $self->{ mem }->[ $addr + 2 ] << 16 )
+        | ( $self->{ mem }->[ $addr + 3 ] << 32 );
+}
+
+sub write_32 {
+    my $self = shift;
+    my( $addr, $val ) = @_;
+
+    $self->{ mem }->[ $addr ] = $val & 0xFF;
+    $self->{ mem }->[ $addr + 1 ] = ( $val >> 8 ) & 0xFF;
+    $self->{ mem }->[ $addr + 2 ] = ( $val >> 16 ) & 0xFF;
+    $self->{ mem }->[ $addr + 3 ] = ( $val >> 24 ) & 0xFF;
+}
+
+sub poke_code {
+    my $self = shift;
+    my $addr = shift;
+
+    $self->{ mem }->[ $addr++ ] = $_ for @_;
+}
+
+sub load_rom {
+    my $self = shift;
+    my ( $f, $a ) = @_;
+
+    open my $fh, '<', $f or croak "Can't read $f ($!)\n";
+    binmode $fh;
+    my $sz = -s $fh;
+    sysread $fh, my $buf, $sz or croak "Error reading $f ($!)\n";
+    close $fh;
+
+    $self->write_chunk( $a, $buf );
 }
 
 sub call_os {
-  my $self = shift;
-  my $id   = ident( $self );
   croak "call_os() not supported";
+}
+
+sub run {
+    my $self = shift;
+    my $ic = shift;
+    my $cb = shift;
+
+    while ( $ic-- > 0 ) {
+        my( $a, $x, $y, $s, $p, $pc ) = $self->get_state;
+        $cb->( $pc, $self->{ mem }->[ $pc ], $a, $x, $y, $s, $p ) if defined $cb;
+        $self->set_pc( $pc + 1 );
+        $self->{ ops }->[ $self->{ mem }->[ $pc ] ]->( $self );
+    }
+}
+
+sub make_vector {
+    my $self = shift;
+    my ( $call, $vec, $func ) = @_;
+
+    $self->{ mem }->[ $call ] = 0x6C;                   # JMP (indirect)
+    $self->{ mem }->[ $call + 1 ] = $vec & 0xFF;
+    $self->{ mem }->[ $call + 2 ] = ( $vec >> 8 ) & 0xFF;
+
+    my $jumptab = $self->{ jumptab };
+    my $addr    = $jumptab;
+    $self->{ mem }->[ $jumptab++ ] = ESCAPE_OP;
+    $self->{ mem }->[ $jumptab++ ] = ESCAPE_SIG;
+    $self->{ mem }->[ $jumptab++ ] = $func;
+    $self->{ mem }->[ $jumptab++ ] = 0x60;
+
+    $self->set_jumptab( $jumptab );
+
+    $self->{ mem }->[ $vec ] = $addr & 0xFF;
+    $self->{ mem }->[ $vec + 1 ] = ( $addr >> 8 ) & 0xFF;
+}
+
+sub _inst {
+    my $src = join( "\n", @_ );
+
+    # registers
+    $src    =~ s{\$(a|x|y|s|p|pc)\b}{\$self->{reg}->{$1}}g;
+
+    # memory and zn access
+    $src    =~ s{\$(mem|zn)\[}{\$self->{$1}->[}g;
+
+    my $cr  = eval "sub { my \$self=shift; ${src} }";
+    confess "$@" if $@;
+    return $cr;
+}
+
+sub _bad_inst {
+    my $self = shift;
+    my $pc   = $self->get_pc;
+
+    croak sprintf( "Bad instruction at &%04x (&%02x)\n",
+      $pc - 1, $self->{ mem }->[ $pc - 1 ] );
 }
 
 # Functions that generate code fragments
@@ -839,7 +872,7 @@ Acme::6502 - Pure Perl 65C02 simulator.
 
 =head1 VERSION
 
-This document describes Acme::6502 version 0.75
+This document describes Acme::6502 version 0.76
 
 =head1 SYNOPSIS
 
@@ -867,6 +900,10 @@ well the squirrels will never know the difference.
 =head1 INTERFACE 
 
 =over
+
+=item C<new>
+
+Create a new 6502 CPU.
 
 =item C<call_os( $vec_number )>
 
@@ -1025,7 +1062,7 @@ Acme::6502 requires no configuration files or environment variables.
 
 =head1 DEPENDENCIES
 
-C<Acme::6502> needs C<Class::Std>.
+None.
 
 =head1 INCOMPATIBILITIES
 
@@ -1048,7 +1085,7 @@ Brian Cassidy C<< <bricas@cpan.org> >>
 
 =head1 LICENCE AND COPYRIGHT
 
-Copyright (c) 2006-2008, Andy Armstrong C<< <andy@hexten.net> >>. All
+Copyright (c) 2006-2010, Andy Armstrong C<< <andy@hexten.net> >>. All
 rights reserved.
 
 This module is free software; you can redistribute it and/or
