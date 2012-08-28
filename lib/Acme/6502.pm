@@ -4,7 +4,7 @@ use warnings FATAL => 'all';
 use strict;
 use Carp;
 
-our $VERSION = '0.76';
+our $VERSION = '0.77';
 
 # CPU flags
 use constant {
@@ -129,7 +129,7 @@ sub _BUILD {
         _inst( _and( _abs() ) ),       # 2D AND abs
         _inst( _rol( _abs() ) ),       # 2E ROL abs
         $bad_inst,                     # 2F BBR2 rel
-        _inst( _bfnz( _rel(), N ) ),   # 30 BPL rel
+        _inst( _bfnz( _rel(), N ) ),   # 30 BMI rel
         _inst( _and( _zpiy() ) ),      # 31 AND (zp), y
         _inst( _and( _zpi() ) ),       # 32 AND (zp)
         $bad_inst,                     # 33
@@ -145,7 +145,7 @@ sub _BUILD {
         _inst( _and( _absx() ) ),      # 3D AND abs, x
         _inst( _rol( _absx() ) ),      # 3E ROL abs, x
         $bad_inst,                     # 3F BBR3 rel
-        _inst( _pop( '$p' ), _rts() ), # 40 RTI
+        _inst( _rti() ),               # 40 RTI
         _inst( _eor( _zpix() ) ),      # 41 EOR (zp, x)
         $bad_inst,                     # 42
         $bad_inst,                     # 43
@@ -178,7 +178,7 @@ sub _BUILD {
         _inst( _lsr( _absx() ) ),      # 5E LSR abs, x
         $bad_inst,                     # 5F BBR5 rel
         _inst( _rts() ),               # 60 RTS
-        _inst( _adc( _zpx() ) ),       # 61 ADC zp, x
+        _inst( _adc( _zpix() ) ),      # 61 ADC (zp, x)
         $bad_inst,                     # 62
         $bad_inst,                     # 63
         _inst( _sto( _zp(), '0' ) ),   # 64 STZ zp
@@ -199,9 +199,9 @@ sub _BUILD {
         $bad_inst,                                 # 73
         _inst( _sto( _zpx(), '0' ) ),              # 74 STZ zp, x
         _inst( _adc( _zpx() ) ),                   # 75 ADC zp, x
-        _inst( _adc( _zpx() ) ),                   # 76 ROR zp, x
+        _inst( _ror( _zpx() ) ),                   # 76 ROR zp, x
         $bad_inst,                                 # 77
-        _inst( '$p |= I;' ),                       # 78 STI
+        _inst( '$p |= I;' ),                       # 78 SEI
         _inst( _adc( _absy() ) ),                  # 79 ADC abs, y
         _inst( _pop( '$y' ), _status( '$y' ) ),    # 7A PLY
         $bad_inst,                                 # 7B
@@ -855,6 +855,16 @@ sub _jmpix {
    . _jmp_i( '$w' );
 }
 
+sub _rti {
+  return
+     _pop( '$p' )
+   . '$p |= R;'
+   . 'my ($lo, $hi); '
+   . _pop( '$lo' )
+   . _pop( '$hi' )
+   . '$pc = $lo | ($hi << 8);' . "\n";
+}
+
 sub _rts {
   return
      'my ($lo, $hi); '
@@ -1085,7 +1095,7 @@ Brian Cassidy C<< <bricas@cpan.org> >>
 
 =head1 LICENCE AND COPYRIGHT
 
-Copyright (c) 2006-2010, Andy Armstrong C<< <andy@hexten.net> >>. All
+Copyright (c) 2006-2012, Andy Armstrong C<< <andy@hexten.net> >>. All
 rights reserved.
 
 This module is free software; you can redistribute it and/or
